@@ -1,2 +1,8 @@
 # StarDash
 星盘 StarDash：跨平台菜单栏/托盘状态面板（Windows · macOS），动态 SVG 图标与多主题
+
+## 许可证 / License
+
+本项目采用 [MIT](LICENSE) 许可证。
+
+This project is licensed under the [MIT License](LICENSE).
