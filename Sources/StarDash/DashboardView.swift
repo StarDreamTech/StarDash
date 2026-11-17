@@ -7,6 +7,7 @@ struct DashboardView: View {
     let resize: () -> Void
     let setPinned: () -> Void
     let quit: () -> Void
+    let editCommand: (CommandShortcut?) -> Void
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     var body: some View {
@@ -72,6 +73,7 @@ struct DashboardView: View {
             } else {
                 AwakeSummary(awake: model.awake)
             }
+            CommandShortcutsView(model: model, edit: editCommand)
             HStack {
                 Menu {
                     Toggle("CPU", isOn: $model.showCPU)
@@ -104,6 +106,8 @@ struct DashboardView: View {
         .onChange(of: model.snapshot.battery.present) { _ in resize() }
         .onReceive(model.awake.$message) { _ in resize() }
         .onReceive(model.awake.$deadline) { _ in resize() }
+        .onChange(of: model.commands.count) { _ in resize() }
+        .onChange(of: model.commandMessage) { _ in resize() }
     }
 
     private func placeholder(_ key: String) -> String {

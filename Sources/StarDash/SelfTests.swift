@@ -41,6 +41,64 @@ enum SelfTests {
         awake.start(seconds: -1)
         try check(!awake.isActive && awake.message != nil, "无效防休眠时间应拒绝")
         print("PASS: 16 项计算、异常边界及本机采集检查")
+        try commands()
+    }
+
+    private static func commands() throws {
+        let suite = "StarDash.SelfTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(defaults: defaults)
+        let command = try CommandShortcut(name: "  中文命令  ", command: "printf '%s\\n' \"it's fine\"\npwd", icon: "unknown")
+        try check(command.name == "中文命令" && command.icon == "terminal.fill", "名称清理或图标回退错误")
+        try check((try? CommandShortcut(name: " ", command: "pwd")) == nil, "空名称必须拒绝")
+        try check((try? CommandShortcut(name: "测试", command: "\n ")) == nil, "空命令必须拒绝")
+        try check((try? CommandShortcut(name: "测试", command: "pwd\0")) == nil, "空字符必须拒绝")
+        try model.saveCommand(command)
+        try check(AppModel(defaults: defaults).commands == [command], "命令重启恢复错误")
+        let edited = try CommandShortcut(id: command.id, name: "已编辑", command: "pwd")
+        try model.saveCommand(edited)
+        try check(model.commands == [edited], "编辑不能新增重复项")
+        try model.deleteCommand(edited)
+        try check(AppModel(defaults: defaults).commands.isEmpty, "删除命令未保存")
+        let corrupt = Data("not-json".utf8)
+        defaults.set(corrupt, forKey: "commands")
+        let damaged = AppModel(defaults: defaults)
+        try check(damaged.commandMessage != nil, "损坏的命令数据必须提示")
+        var rejected = false
+        do { try damaged.saveCommand(command) } catch { rejected = true }
+        try check(rejected && defaults.data(forKey: "commands") == corrupt && damaged.commands.isEmpty,
+                  "保存失败必须保留原始数据及内存状态")
+
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appendingPathComponent("StarDash-Test-\(UUID().uuidString)")
+        defer { try? manager.removeItem(at: root) }
+        let home = root.appendingPathComponent("中文 home's folder")
+        try manager.createDirectory(at: home, withIntermediateDirectories: true)
+        let output = root.appendingPathComponent("result.txt")
+        let body = "printf '%s\\n' \"it's fine\" '中文 空格' '$HOME $(exit 9) `exit 8`' > \(TerminalCommand.shellQuote(output.path))\npwd >> \(TerminalCommand.shellQuote(output.path))\nexit 7"
+        let probe = try CommandShortcut(name: "不要执行 $(exit 99)", command: body)
+        let script = try TerminalCommand.prepare(probe)
+        defer { try? manager.removeItem(at: script.deletingLastPathComponent()) }
+        let attributes = try manager.attributesOfItem(atPath: script.path)
+        try check((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700, "命令脚本必须仅本人可读写执行")
+        try TerminalCommand.script(for: probe, home: home).write(to: script, atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [script.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["ZDOTDIR"] = root.path
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        let result = try String(contentsOf: output, encoding: .utf8)
+        try check(result == "it's fine\n中文 空格\n$HOME $(exit 9) `exit 8`\n\(home.path)\n",
+                  "命令原文、引号、Unicode、多行或工作目录未正确传递")
+        try check(process.terminationStatus == 7, "命令退出码未保留")
+        try check(!manager.fileExists(atPath: script.deletingLastPathComponent().path), "执行后未清理临时脚本")
+        print("PASS: 命令校验、增改删恢复、损坏数据保护、权限、真实 zsh 转义执行、目录、退出码及临时清理")
     }
 
     static func power() throws {

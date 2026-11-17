@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var panel: NSPanel?
+    private var commandEditor: NSWindow?
     private var popupHost: NSHostingController<DashboardView>?
     private var panelHost: NSHostingController<DashboardView>?
     private var floating = false
@@ -37,7 +38,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                       switchMode: { [weak self] in self?.switchMode() },
                       resize: { [weak self] in self?.resizeViews() },
                       setPinned: { [weak self] in self?.panel?.level = self?.model.pinned == true ? .floating : .normal },
-                      quit: { NSApp.terminate(nil) })
+                      quit: { NSApp.terminate(nil) },
+                      editCommand: { [weak self] command in self?.showCommandEditor(command) })
+    }
+
+    private func showCommandEditor(_ command: CommandShortcut?) {
+        popover.performClose(nil)
+        if commandEditor == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 430, height: 420),
+                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.center()
+            commandEditor = window
+        }
+        guard let window = commandEditor else { return }
+        window.title = command == nil ? "星盘 · 添加命令" : "星盘 · 编辑命令"
+        window.contentViewController = NSHostingController(rootView: CommandEditorView(model: model, original: command) {
+            window.orderOut(nil)
+        })
+        window.setContentSize(window.contentViewController!.view.fittingSize)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func createMenu() {
