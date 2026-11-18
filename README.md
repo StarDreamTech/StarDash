@@ -1,3 +1,7 @@
+**简体中文** | [English](README.en.md)
+
+<img src="assets/stardash.svg" width="96" height="96" alt="星盘 StarDash 标志" />
+
 # StarDash
 
 星盘：Mac 菜单栏状态面板与小悬浮窗口。当前为 0.2.0 本地体验版，使用 Swift、SwiftUI 和 AppKit，无第三方依赖。
