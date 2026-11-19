@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var commands: [CommandShortcut]
     @Published private(set) var commandMessage: String?
     let awake = KeepAwake()
+    let lifecycle = AppLifecycle()
     private let defaults: UserDefaults
     private let sampler = MetricsSampler()
     private let queue = DispatchQueue(label: "StarDash.metrics", qos: .utility)

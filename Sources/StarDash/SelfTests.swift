@@ -42,6 +42,50 @@ enum SelfTests {
         try check(!awake.isActive && awake.message != nil, "无效防休眠时间应拒绝")
         print("PASS: 16 项计算、异常边界及本机采集检查")
         try commands()
+        try cli()
+    }
+
+    private static func cli() throws {
+        let id = UUID().uuidString
+        let valid = [["status"], ["show", "floating"], ["settings", "set", "compact", "true"],
+                     ["awake", "start", "--minutes", "1440"], ["startup", "enable"], ["update", "install"],
+                     ["commands", "add", "--name", "--json", "--command", "printf '%s' '$HOME'\npwd"],
+                     ["commands", "edit", id, "--command", "pwd"], ["commands", "run", id], ["commands", "remove", id]]
+        for arguments in valid { try DashCLI.validate(arguments) }
+        let invalid = [[], ["status", "extra"], ["settings", "set", "minutes", "true"],
+                       ["settings", "set", "compact", "yes"], ["awake", "start", "--minutes", "0"],
+                       ["awake", "start", "--minutes", "1441"], ["awake", "start", "--minutes", "nan"],
+                       ["commands", "run", "not-a-uuid"], ["commands", "edit", id],
+                       ["commands", "add", "--name", "test"],
+                       ["commands", "add", "--name", "test", "--name", "again", "--command", "pwd"],
+                       ["commands", "add", "--name", "test", "--command", "pwd", "--typo", "x"]]
+        for arguments in invalid {
+            var rejected = false
+            do { try DashCLI.validate(arguments) } catch { rejected = true }
+            try check(rejected, "CLI 应拒绝无效参数：\(arguments)")
+        }
+        let options = try DashCLI.options(["--command", "printf '%s' '$HOME'\npwd"], allowed: ["--command"])
+        try check(options["--command"] == "printf '%s' '$HOME'\npwd", "CLI 不能更改命令内容")
+        try check(ReleaseVersion("v0.10.0")! > ReleaseVersion("0.3.0")!, "版本必须按数字比较")
+        try check(ReleaseVersion("0.3.0") == ReleaseVersion("v0.3.0"), "v 前缀处理错误")
+        for invalid in ["1", "1.2", "1.2.3.4", "-1.0.0", "1.0.0-beta", "1.0.0;pwd", "1..0", "１.0.0"] {
+            try check(ReleaseVersion(invalid) == nil, "必须拒绝无效发布版本：\(invalid)")
+        }
+        let current = PublishedRelease(tag_name: "v0.3.0", draft: false, prerelease: false)
+        let newer = PublishedRelease(tag_name: "v0.4.0", draft: false, prerelease: false)
+        let same = try current.newer(than: "0.3.0")
+        let upgrade = try newer.newer(than: "0.3.0")
+        try check(!same && upgrade, "相同版本与升级判断错误")
+        let installed = ControlJSON.data(["casks": [["token": "stardash", "tap": "stardreamtech/tap", "installed": "0.3.0"]]])
+        let installedVersion = try HomebrewUpdate.installedVersion(installed)
+        try check(installedVersion == "0.3.0", "未识别官方 Cask")
+        for bad in [["casks": []], ["casks": [["token": "stardash", "tap": "other/tap", "installed": "0.3.0"]]],
+                    ["casks": [["token": "stardash", "tap": "stardreamtech/tap", "installed": NSNull()]]]] as [[String: Any]] {
+            var rejected = false
+            do { _ = try HomebrewUpdate.installedVersion(ControlJSON.data(bad)) } catch { rejected = true }
+            try check(rejected, "未安装或非官方 Cask 必须拒绝")
+        }
+        print("PASS: CLI 参数与选项边界、命令原文、数值版本比较、发布信息及官方 Homebrew 安装校验")
     }
 
     private static func commands() throws {

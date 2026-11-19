@@ -10,9 +10,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var popupHost: NSHostingController<DashboardView>?
     private var panelHost: NSHostingController<DashboardView>?
     private var floating = false
+    private var control: LocalControl?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        let control = LocalControl { [weak self] arguments in
+            guard let self else { throw dashError("星盘正在退出。") }
+            return try self.handleControl(arguments)
+        }
+        do { try control.start(); self.control = control }
+        catch { fputs("StarDash: \(error.localizedDescription)\n", stderr); NSApp.terminate(nil); return }
         createMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
@@ -28,8 +35,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         popover.contentViewController = popupHost
         resizeViews()
         model.setVisible(false)
-        if CommandLine.arguments.contains("--show-window") || UserDefaults.standard.bool(forKey: "preferFloating") {
+        if !CommandLine.arguments.contains("--background") &&
+            (CommandLine.arguments.contains("--show-window") || UserDefaults.standard.bool(forKey: "preferFloating")) {
             showFloating()
+        } else {
+            floating = UserDefaults.standard.bool(forKey: "preferFloating")
+        }
+    }
+
+    private func settings() -> [String: Bool] {
+        ["compact": model.compact, "pinned": model.pinned, "showCPU": model.showCPU,
+         "showMemory": model.showMemory, "showNetwork": model.showNetwork, "showBattery": model.showBattery]
+    }
+
+    private func handleControl(_ args: [String]) throws -> [String: Any] {
+        try DashCLI.validate(args)
+        switch args[0] {
+        case "status":
+            model.lifecycle.refreshLoginStatus()
+            return ["running": true, "version": AppLifecycle.version, "pid": ProcessInfo.processInfo.processIdentifier,
+                    "metrics": try ControlJSON.object(model.snapshot), "settings": settings(),
+                    "mode": floating ? "floating" : "panel", "commands_count": model.commands.count,
+                    "command_message": model.commandMessage as Any? ?? NSNull(),
+                    "awake": ["active": model.awake.isActive, "remaining_seconds": model.awake.remaining],
+                    "startup": model.lifecycle.loginStatus,
+                    "update": ["state": model.lifecycle.updateState, "latest_version": model.lifecycle.latestVersion as Any? ?? NSNull(),
+                               "message": model.lifecycle.message as Any? ?? NSNull(), "log_path": model.lifecycle.logURL.path]]
+        case "show":
+            if args.last == "floating" || (args.count == 1 && floating) { showFloating() }
+            else {
+                panel?.orderOut(nil)
+                floating = false
+                UserDefaults.standard.set(false, forKey: "preferFloating")
+                showPopover()
+            }
+            return ["mode": floating ? "floating" : "panel"]
+        case "settings":
+            if args[1] == "set" {
+                let value = args[3] == "true"
+                switch args[2] {
+                case "compact": model.compact = value
+                case "pinned": model.pinned = value; panel?.level = value ? .floating : .normal
+                case "showCPU": model.showCPU = value
+                case "showMemory": model.showMemory = value
+                case "showNetwork": model.showNetwork = value
+                case "showBattery": model.showBattery = value
+                default: break
+                }
+                resizeViews()
+            }
+            return ["settings": settings()]
+        case "awake":
+            if args[1] == "stop" { model.awake.stop() }
+            else {
+                guard !model.awake.isActive else { throw dashError("防休眠已在运行，请先结束。") }
+                model.awake.start(seconds: TimeInterval(Int(args[3])! * 60))
+            }
+            if let message = model.awake.message { throw dashError(message) }
+            return ["active": model.awake.isActive, "remaining_seconds": model.awake.remaining]
+        case "commands":
+            if args[1] == "list" { return ["commands": try ControlJSON.object(model.commands)] }
+            if args[1] == "add" {
+                let values = try DashCLI.options(Array(args.dropFirst(2)), allowed: ["--name", "--command", "--icon"])
+                let command = try CommandShortcut(name: values["--name"]!, command: values["--command"]!, icon: values["--icon"] ?? "terminal.fill")
+                try model.saveCommand(command)
+                return ["command": try ControlJSON.object(command)]
+            }
+            guard let command = model.commands.first(where: { $0.id.uuidString.lowercased() == args[2].lowercased() }) else {
+                throw dashError("找不到这个命令 UUID。")
+            }
+            if args[1] == "remove" { try model.deleteCommand(command); return ["removed": command.id.uuidString] }
+            if args[1] == "run" {
+                model.runCommand(command)
+                return ["accepted": true, "command_id": command.id.uuidString, "message": "已请求终端执行，请在终端查看结果。"]
+            }
+            let values = try DashCLI.options(Array(args.dropFirst(3)), allowed: ["--name", "--command", "--icon"])
+            let edited = try CommandShortcut(id: command.id, name: values["--name"] ?? command.name,
+                                             command: values["--command"] ?? command.command, icon: values["--icon"] ?? command.icon)
+            try model.saveCommand(edited)
+            return ["command": try ControlJSON.object(edited)]
+        case "startup":
+            if args[1] != "status" { try model.lifecycle.setStartAtLogin(args[1] == "enable") }
+            model.lifecycle.refreshLoginStatus()
+            return ["startup": model.lifecycle.loginStatus, "message": model.lifecycle.message as Any? ?? NSNull()]
+        case "update":
+            if args[1] == "check" { try model.lifecycle.checkForUpdates() }
+            else { try model.lifecycle.updateAndRestart() }
+            return ["accepted": true, "state": model.lifecycle.updateState, "message": model.lifecycle.message as Any? ?? NSNull()]
+        case "restart":
+            try model.lifecycle.restart()
+            return ["accepted": true, "state": "restarting"]
+        case "quit":
+            guard !model.lifecycle.busy else { throw dashError("正在检查或安装更新，请稍后退出。") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
+            return ["accepted": true, "state": "quitting"]
+        default: throw dashError("未知命令。")
         }
     }
 
@@ -77,8 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 panel?.orderOut(nil)
                 model.setVisible(false)
             } else {
-                panel?.makeKeyAndOrderFront(nil)
-                model.setVisible(true)
+                showFloating()
             }
         } else if popover.isShown {
             popover.performClose(nil)
@@ -179,10 +278,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         return true
     }
 
-    func applicationWillTerminate(_ notification: Notification) { model.shutdown() }
+    func applicationWillBecomeActive(_ notification: Notification) { model.lifecycle.refreshLoginStatus() }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if model.lifecycle.busy {
+            model.lifecycle.showError(dashError("正在检查或安装更新，请稍后退出。"))
+            return .terminateCancel
+        }
+        return .terminateNow
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { control?.stop(); model.shutdown() }
 }
 
 do {
+    if CommandLine.arguments.dropFirst().first == "--cli" {
+        exit(try DashCLI.run(Array(CommandLine.arguments.dropFirst(2))))
+    }
     if CommandLine.arguments.contains("--self-test") {
         try SelfTests.run()
         exit(0)
@@ -202,6 +314,10 @@ do {
         exit(0)
     }
 } catch {
+    if CommandLine.arguments.dropFirst().first == "--cli" {
+        print(String(decoding: ControlJSON.data(["ok": false, "error": error.localizedDescription]), as: UTF8.self))
+        exit(1)
+    }
     fputs("StarDash: \(error.localizedDescription)\n", stderr)
     exit(1)
 }

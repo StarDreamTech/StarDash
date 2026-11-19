@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 struct DashboardView: View {
     @ObservedObject var model: AppModel
@@ -88,11 +89,12 @@ struct DashboardView: View {
                 }
                 .accessibilityLabel(model.compact ? "展开面板" : "精简面板")
                 Menu {
-                    Button("退出星盘", action: quit)
+                    LifecycleMenu(lifecycle: model.lifecycle, quit: quit)
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("更多")
             }
             .font(.caption).foregroundStyle(.secondary).buttonStyle(.borderless)
+            LifecycleMessage(lifecycle: model.lifecycle)
         }
         .padding(18)
         .frame(width: 372)
@@ -108,10 +110,47 @@ struct DashboardView: View {
         .onReceive(model.awake.$deadline) { _ in resize() }
         .onChange(of: model.commands.count) { _ in resize() }
         .onChange(of: model.commandMessage) { _ in resize() }
+        .onReceive(model.lifecycle.$message) { _ in resize() }
     }
 
     private func placeholder(_ key: String) -> String {
         model.snapshot.errors[key] == nil ? "采集中" : "不可用"
+    }
+}
+
+private struct LifecycleMenu: View {
+    @ObservedObject var lifecycle: AppLifecycle
+    let quit: () -> Void
+
+    var body: some View {
+        Toggle("开机自启动", isOn: Binding(get: { lifecycle.loginStatus == "enabled" || lifecycle.loginStatus == "requires_approval" }, set: { enabled in
+            do { try lifecycle.setStartAtLogin(enabled) } catch { lifecycle.showError(error) }
+        }))
+        if lifecycle.loginStatus == "requires_approval" {
+            Button("在系统设置中允许自启动") { SMAppService.openSystemSettingsLoginItems() }
+        }
+        Button("检查更新") {
+            do { try lifecycle.checkForUpdates() } catch { lifecycle.showError(error) }
+        }.disabled(lifecycle.busy)
+        Button("通过 Homebrew 更新并重启") {
+            do { try lifecycle.updateAndRestart() } catch { lifecycle.showError(error) }
+        }.disabled(lifecycle.busy)
+        Button("重启星盘") {
+            do { try lifecycle.restart() } catch { lifecycle.showError(error) }
+        }.disabled(lifecycle.busy)
+        Divider()
+        Button("退出星盘", action: quit).disabled(lifecycle.busy)
+    }
+}
+
+private struct LifecycleMessage: View {
+    @ObservedObject var lifecycle: AppLifecycle
+
+    var body: some View {
+        if let message = lifecycle.message {
+            Text(message).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
