@@ -1,0 +1,2 @@
+#!/bin/zsh -f
+exec "${0:A:h:h}/MacOS/StarDash" --cli "$@"
